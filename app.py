@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from imblearn.over_sampling import SMOTE
 import sklearn.metrics
 import streamlit as st
 
@@ -37,7 +38,14 @@ X_train = artifacts['X_train']
 # Navigation sidebar
 menu = st.sidebar.radio(
     "Navigation", 
-    ["Exploratory Data Analysis", "PCA Projection", "Model Results & Metrics", "Feature Importance", "Test Custom Transaction"]
+    [
+        "Exploratory Data Analysis", 
+        "PCA Projection", 
+        "Model Results & Metrics", 
+        "Feature Importance", 
+        "Test Custom Transaction",
+        "Synthetic Transaction Generator"
+    ]
 )
 
 # ----------------------------
@@ -942,9 +950,6 @@ elif menu == "Feature Importance":
     # 6. INDIVIDUAL FEATURE ANALYSIS
     # --------------------------------------------------
 
-# --------------------------------------------------
-# 6. INDIVIDUAL FEATURE ANALYSIS
-# --------------------------------------------------
     st.subheader("Individual Feature Analysis")
 
     selected_feature = st.selectbox(
@@ -1031,43 +1036,675 @@ elif menu == "Feature Importance":
 # ----------------------------
 # Page 5: Prediction Interface
 # ----------------------------
-elif menu == "Test Custom Transaction":
-    st.header("Predict Single Transaction Fraud")
-    st.caption("V1-V28 are anonymized PCA components from the original dataset - they don't map to "
-               "real-world fields, so leave them at 0 unless you're testing specific values from the data.")
 
-    chosen_model_name = st.selectbox("Choose Classification Model", list(models.keys()))
+
+elif menu == "Test Custom Transaction":
+    st.header("Custom Transaction Fraud Detection")
+
+    st.write(
+        "Enter transaction details and let a trained machine learning "
+        "model evaluate whether the transaction is potentially fraudulent."
+    )
+
+    st.warning(
+        "V1–V28 are anonymized PCA components, not real-world transaction "
+        "fields. Their default value is 0. Arbitrary values may not represent "
+        "realistic transactions."
+    )
+
+    # --------------------------------------------------
+    # 1. MODEL SELECTION
+    # --------------------------------------------------
+    chosen_model_name = st.selectbox(
+        "Choose Classification Model",
+        list(models.keys())
+    )
+
     selected_model = models[chosen_model_name]
 
-    c1, c2 = st.columns(2)
-    with c1:
-        user_amount = st.number_input("Transaction Amount ($)", value=150.0)
-    with c2:
-        user_time = st.number_input("Time Elapsed (seconds)", value=25000.0)
+    st.divider()
 
-    st.write("##### PCA Features (V1 - V28):")
+    # --------------------------------------------------
+    # 2. TRANSACTION INPUT
+    # --------------------------------------------------
+    st.subheader("Transaction Details")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        user_amount = st.number_input(
+            "Transaction Amount",
+            min_value=0.0,
+            value=st.session_state.get('custom_amount', 150.0),
+            step=10.0,
+            key="custom_amount"
+        )
+
+    with c2:
+        user_time = st.number_input(
+            "Time Elapsed (seconds)",
+            min_value=0.0,
+            value=st.session_state.get('custom_time', 25000.0),
+            step=100.0,
+            key="custom_time"
+        )
+
+    st.subheader("PCA Features (V1–V28)")
+
+    st.caption(
+        "Enter values manually or leave them at 0 for experimentation."
+    )
+
     v_dict = {}
     cols = st.columns(4)
+
     for i in range(1, 29):
-        v_dict[f'V{i}'] = cols[(i - 1) % 4].number_input(f'V{i}', value=0.0, step=0.1)
+        key = f"custom_V{i}"
 
-    if st.button("Predict Fraud Status"):
-        # Scale input values
-        scaled_amount_val = artifacts['amount_scaler'].transform([[user_amount]])[0][0]
-        scaled_time_val = artifacts['time_scaler'].transform([[user_time]])[0][0]
+        with cols[(i - 1) % 4]:
+            v_dict[f'V{i}'] = st.number_input(
+                f'V{i}',
+                value=st.session_state.get(key, 0.0),
+                step=0.1,
+                format="%.4f",
+                key=key
+            )
 
-        # Structure dictionary matching feature column order
+    st.divider()
+
+    # --------------------------------------------------
+    # 3. PREDICTION
+    # --------------------------------------------------
+    if st.button("Predict Fraud Status", type="primary"):
+
+        # Scale Amount and Time
+        scaled_amount_val = artifacts['amount_scaler'].transform(
+            [[user_amount]]
+        )[0][0]
+
+        scaled_time_val = artifacts['time_scaler'].transform(
+            [[user_time]]
+        )[0][0]
+
+        # Prepare input
         input_data = v_dict.copy()
+
         input_data['scaled_amount'] = scaled_amount_val
         input_data['scaled_time'] = scaled_time_val
 
-        input_df = pd.DataFrame([input_data])[X_train.columns]
+        input_df = pd.DataFrame(
+            [input_data],
+            columns=X_train.columns
+        )
 
+        # Predict
         pred = selected_model.predict(input_df)[0]
-        prob = selected_model.predict_proba(input_df)[0][1]
 
-        st.write("---")
+        if not hasattr(selected_model, 'predict_proba'):
+            st.error("This model does not support probability estimation.")
+            st.stop()
+
+        probabilities = selected_model.predict_proba(input_df)[0]
+
+        fraud_index = list(selected_model.classes_).index(1)
+        normal_index = list(selected_model.classes_).index(0)
+
+        fraud_prob = probabilities[fraud_index]
+        normal_prob = probabilities[normal_index]
+
+        # Store prediction so it survives Streamlit reruns
+        st.session_state['custom_prediction_result'] = {
+            'model_name': chosen_model_name,
+            'prediction': pred,
+            'fraud_prob': fraud_prob,
+            'normal_prob': normal_prob,
+            'input_df': input_df
+        }
+
+    # --------------------------------------------------
+    # 4. DISPLAY STORED PREDICTION
+    # --------------------------------------------------
+    if 'custom_prediction_result' in st.session_state:
+
+        result = st.session_state['custom_prediction_result']
+
+        pred = result['prediction']
+        fraud_prob = result['fraud_prob']
+        normal_prob = result['normal_prob']
+        input_df = result['input_df']
+        model_name = result['model_name']
+
+        st.divider()
+
+        # --------------------------------------------------
+        # 5. PREDICTION RESULT
+        # --------------------------------------------------
+        st.subheader("Prediction Result")
+
         if pred == 1:
-            st.error(f"Prediction: **FRAUD DETECTED** | Fraud Probability: {prob:.2%}")
+            st.error("FRAUD DETECTED")
         else:
-            st.success(f"Prediction: **NORMAL TRANSACTION** | Fraud Probability: {prob:.2%}")
+            st.success("NORMAL TRANSACTION")
+
+        col1, col2 = st.columns(2)
+
+        col1.metric(
+            "Fraud Probability",
+            f"{fraud_prob:.2%}"
+        )
+
+        col2.metric(
+            "Normal Probability",
+            f"{normal_prob:.2%}"
+        )
+
+        st.caption(
+            f"Prediction generated using {model_name}."
+        )
+
+        # --------------------------------------------------
+        # 6. PROBABILITY COMPARISON
+        # --------------------------------------------------
+        st.subheader("Prediction Probability")
+
+        fig1, ax1 = plt.subplots(figsize=(8, 4))
+
+        labels = ['Normal', 'Fraud']
+        values = [normal_prob * 100, fraud_prob * 100]
+
+        bars = ax1.bar(
+            labels,
+            values,
+            color=['#3498DB', '#E74C3C'],
+            width=0.5
+        )
+
+        for bar, value in zip(bars, values):
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f'{value:.2f}%',
+                ha='center',
+                va='bottom'
+            )
+
+        ax1.set_ylabel("Estimated Probability (%)")
+        ax1.set_ylim(0, 110)
+        ax1.set_title("Model Prediction Probabilities")
+        ax1.grid(axis='y', alpha=0.2)
+
+        ax1.spines['top'].set_visible(False)
+        ax1.spines['right'].set_visible(False)
+
+        fig1.tight_layout()
+        st.pyplot(fig1)
+        plt.close(fig1)
+
+        # --------------------------------------------------
+        # 7. SHAP FEATURE CONTRIBUTIONS
+        # --------------------------------------------------
+        st.divider()
+        st.subheader("What Influenced This Prediction?")
+
+        st.write(
+            "This chart explains which features pushed the model's "
+            "prediction towards fraud or normal."
+        )
+
+        st.caption(
+            "Positive SHAP values push towards fraud. Negative values "
+            "push towards normal. Features are ranked by absolute contribution."
+        )
+
+        try:
+            import shap
+
+            # Use a small representative background sample
+            background = shap.sample(
+                X_train,
+                min(30, len(X_train)),
+                random_state=42
+            )
+
+            # Explain the probability of fraud (class 1)
+            def fraud_probability(data):
+                data_df = pd.DataFrame(
+                    data,
+                    columns=X_train.columns
+                )
+
+                probabilities = selected_model.predict_proba(data_df)
+
+                fraud_index_local = list(
+                    selected_model.classes_
+                ).index(1)
+
+                return probabilities[:, fraud_index_local]
+
+            # Permutation explainer works across different model types
+            explainer = shap.Explainer(
+                fraud_probability,
+                background,
+                algorithm="permutation"
+            )
+
+            shap_values = explainer(
+                input_df,
+                max_evals=10 * (2 * len(X_train.columns) + 1)
+            )
+
+            # Extract feature contributions
+            contributions = shap_values.values[0]
+
+            importance_df = pd.DataFrame({
+                'Feature': X_train.columns,
+                'SHAP Value': contributions
+            })
+
+            importance_df['Absolute SHAP'] = (
+                importance_df['SHAP Value'].abs()
+            )
+
+            # Select the 10 most influential features
+            importance_df = importance_df.sort_values(
+                'Absolute SHAP',
+                ascending=False
+            ).head(10)
+
+            importance_df = importance_df.sort_values(
+                'SHAP Value'
+            )
+
+            # Red = pushes towards fraud
+            # Blue = pushes towards normal
+            bar_colors = [
+                '#E74C3C' if value > 0 else '#3498DB'
+                for value in importance_df['SHAP Value']
+            ]
+
+            fig_shap, ax_shap = plt.subplots(figsize=(10, 6))
+
+            ax_shap.barh(
+                importance_df['Feature'],
+                importance_df['SHAP Value'],
+                color=bar_colors
+            )
+
+            ax_shap.axvline(
+                0,
+                color='black',
+                linewidth=0.8
+            )
+
+            ax_shap.set_xlabel(
+                "SHAP Value (Contribution to Fraud Probability)"
+            )
+
+            ax_shap.set_title(
+                "Top 10 Features Influencing This Prediction"
+            )
+
+            ax_shap.grid(axis='x', alpha=0.2)
+
+            ax_shap.spines['top'].set_visible(False)
+            ax_shap.spines['right'].set_visible(False)
+
+            fig_shap.tight_layout()
+            st.pyplot(fig_shap)
+            plt.close(fig_shap)
+
+            col1, col2 = st.columns(2)
+
+            col1.markdown(
+                "<span style='color:#E74C3C'>"
+                "■</span> Pushes towards fraud",
+                unsafe_allow_html=True
+            )
+
+            col2.markdown(
+                "<span style='color:#3498DB'>"
+                "■</span> Pushes towards normal",
+                unsafe_allow_html=True
+            )
+
+            st.caption(
+                "SHAP values explain the selected model's individual "
+                "prediction. They are contributions to the estimated "
+                "fraud probability, not proof of causation."
+            )
+
+        except ImportError:
+            st.warning(
+                "SHAP is not installed. Run: "
+                "python -m pip install shap"
+            )
+
+        except Exception as e:
+            st.warning(
+                f"Could not generate SHAP explanation: {e}"
+            )
+
+        # --------------------------------------------------
+        # 8. INDIVIDUAL FEATURE COMPARISON
+        # --------------------------------------------------
+        st.divider()
+        st.subheader("Transaction Comparison")
+
+        selected_feature = st.selectbox(
+            "Choose a feature to compare against existing transactions",
+            X_train.columns.tolist(),
+            key="comparison_feature"
+        )
+
+        y_train_local = np.asarray(artifacts['y_train'])
+
+        normal_values = X_train.iloc[
+            np.where(y_train_local == 0)[0]
+        ][selected_feature]
+
+        fraud_values = X_train.iloc[
+            np.where(y_train_local == 1)[0]
+        ][selected_feature]
+
+        transaction_value = input_df[selected_feature].iloc[0]
+
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
+
+        ax2.hist(
+            normal_values,
+            bins=50,
+            density=True,
+            alpha=0.5,
+            color="#3498DB",
+            label="Normal Transactions"
+        )
+
+        ax2.hist(
+            fraud_values,
+            bins=50,
+            density=True,
+            alpha=0.6,
+            color="#E74C3C",
+            label="Fraudulent Transactions"
+        )
+
+        ax2.axvline(
+            transaction_value,
+            color="#F39C12",
+            linewidth=2.5,
+            linestyle='--',
+            label="Your Transaction"
+        )
+
+        ax2.set_title(
+            f"{selected_feature}: Your Transaction vs Training Data"
+        )
+
+        ax2.set_xlabel("Processed Feature Value")
+        ax2.set_ylabel("Density")
+        ax2.legend()
+        ax2.grid(alpha=0.2)
+
+        fig2.tight_layout()
+        st.pyplot(fig2)
+        plt.close(fig2)
+
+        st.caption(
+            "The orange line represents your transaction's feature value. "
+            "The distributions show the corresponding feature values in "
+            "the original training data."
+        )
+
+        # --------------------------------------------------
+        # 9. TRANSACTION INPUT SUMMARY
+        # --------------------------------------------------
+        st.divider()
+        st.subheader("Transaction Input Summary")
+
+        st.dataframe(
+            input_df.T.rename(columns={0: 'Entered Value'}),
+            use_container_width=True
+        )
+
+# --------------------------------------------------
+# Page: 6 - TRANSACTION INPUT SUMMARY
+# --------------------------------------------------
+
+elif menu == "Synthetic Transaction Generator":
+
+    from imblearn.over_sampling import SMOTE
+    from sklearn.neighbors import NearestNeighbors
+
+    st.header("Synthetic Transaction Generator")
+
+    st.write(
+        "Generate synthetic normal and fraudulent transactions "
+        "and load them directly into the custom transaction page."
+    )
+
+    st.info(
+        "Synthetic transactions are generated from patterns in "
+        "the training data. They are not real-world verified transactions."
+    )
+
+    y_train = np.asarray(artifacts['y_train'])
+
+    # ==========================================
+    # 1. SYNTHETIC NORMAL TRANSACTION
+    # ==========================================
+
+    st.subheader("Synthetic Normal Transaction")
+
+    st.write(
+        "Generate a new synthetic transaction using nearby "
+        "normal training samples."
+    )
+
+    if st.button(
+        "Generate Synthetic Normal Transaction",
+        key="generate_normal"
+    ):
+
+        generation_id = st.session_state.get(
+            'normal_generation_id', 0
+        ) + 1
+
+        st.session_state['normal_generation_id'] = generation_id
+
+        # Get only normal transactions
+        normal_data = X_train.iloc[
+            np.where(y_train == 0)[0]
+        ].reset_index(drop=True)
+
+        # Find nearby normal transactions
+        neighbors = NearestNeighbors(n_neighbors=6)
+        neighbors.fit(normal_data)
+
+        rng = np.random.default_rng(generation_id)
+
+        # Randomly select an existing normal transaction
+        anchor_index = rng.integers(0, len(normal_data))
+
+        # Find its nearest neighbors
+        distances, indices = neighbors.kneighbors(
+            normal_data.iloc[[anchor_index]]
+        )
+
+        # Exclude the transaction itself
+        neighbor_index = rng.choice(indices[0][1:])
+
+        # Generate a random interpolation factor
+        alpha = rng.random()
+
+        # Interpolate between the two transactions
+        anchor = normal_data.iloc[anchor_index].to_numpy()
+        neighbor = normal_data.iloc[neighbor_index].to_numpy()
+
+        synthetic_values = anchor + alpha * (neighbor - anchor)
+
+        synthetic_transaction = pd.Series(
+            synthetic_values,
+            index=X_train.columns
+        )
+
+        # Convert scaled values back to original values
+        synthetic_transaction['Amount'] = (
+            artifacts['amount_scaler'].inverse_transform(
+                [[synthetic_transaction['scaled_amount']]]
+            )[0][0]
+        )
+
+        synthetic_transaction['Time'] = (
+            artifacts['time_scaler'].inverse_transform(
+                [[synthetic_transaction['scaled_time']]]
+            )[0][0]
+        )
+
+        st.session_state['synthetic_normal_transaction'] = (
+            synthetic_transaction
+        )
+
+    # Display normal transaction
+    if 'synthetic_normal_transaction' in st.session_state:
+
+        transaction = st.session_state['synthetic_normal_transaction']
+
+        st.success("Synthetic normal transaction generated!")
+
+        st.metric("Expected Class", "Normal (0)")
+
+        st.subheader("Transaction Features")
+
+        st.dataframe(
+            transaction.to_frame(name="Value"),
+            use_container_width=True
+        )
+
+        if st.button(
+            "Load Normal Transaction into Custom Fields",
+            key="load_normal"
+        ):
+
+            st.session_state['custom_amount'] = float(
+                transaction['Amount']
+            )
+
+            st.session_state['custom_time'] = float(
+                transaction['Time']
+            )
+
+            for i in range(1, 29):
+                st.session_state[f'custom_V{i}'] = float(
+                    transaction[f'V{i}']
+                )
+
+            st.success(
+                "Normal transaction loaded! "
+                "Go to Test Custom Transaction."
+            )
+
+    st.divider()
+
+    # ==========================================
+    # 2. SYNTHETIC FRAUD TRANSACTION
+    # ==========================================
+
+    st.subheader("Synthetic Fraud Transaction")
+
+    st.write(
+        "Generate a new synthetic fraudulent transaction using SMOTE."
+    )
+
+    if st.button(
+        "Generate Synthetic Fraud Transaction",
+        key="generate_fraud"
+    ):
+
+        generation_id = st.session_state.get(
+            'synthetic_generation_id', 0
+        ) + 1
+
+        st.session_state['synthetic_generation_id'] = generation_id
+
+        smote = SMOTE(random_state=generation_id)
+
+        X_resampled, y_resampled = smote.fit_resample(
+            X_train, y_train
+        )
+
+        X_resampled = pd.DataFrame(
+            X_resampled,
+            columns=X_train.columns
+        )
+
+        # Extract newly generated fraud samples
+        synthetic_samples = X_resampled.iloc[len(X_train):]
+
+        if len(synthetic_samples) == 0:
+
+            st.error("No synthetic fraud transaction was generated.")
+
+        else:
+
+            synthetic_transaction = synthetic_samples.sample(
+                n=1,
+                random_state=generation_id
+            ).iloc[0].copy()
+
+            # Convert scaled values back to original values
+            synthetic_transaction['Amount'] = (
+                artifacts['amount_scaler'].inverse_transform(
+                    [[synthetic_transaction['scaled_amount']]]
+                )[0][0]
+            )
+
+            synthetic_transaction['Time'] = (
+                artifacts['time_scaler'].inverse_transform(
+                    [[synthetic_transaction['scaled_time']]]
+                )[0][0]
+            )
+
+            st.session_state['synthetic_transaction'] = (
+                synthetic_transaction
+            )
+
+    # Display fraud transaction
+    if 'synthetic_transaction' in st.session_state:
+
+        transaction = st.session_state['synthetic_transaction']
+
+        st.success("Synthetic fraud transaction generated!")
+
+        st.metric("Expected Class", "Fraud (1)")
+
+        st.subheader("Transaction Features")
+
+        st.dataframe(
+            transaction.to_frame(name="Value"),
+            use_container_width=True
+        )
+
+        if st.button(
+            "Load Fraud Transaction into Custom Fields",
+            key="load_fraud"
+        ):
+
+            st.session_state['custom_amount'] = float(
+                transaction['Amount']
+            )
+
+            st.session_state['custom_time'] = float(
+                transaction['Time']
+            )
+
+            for i in range(1, 29):
+                st.session_state[f'custom_V{i}'] = float(
+                    transaction[f'V{i}']
+                )
+
+            st.session_state['transaction_loaded'] = True
+
+            st.success(
+                "Fraud transaction loaded! "
+                "Go to Test Custom Transaction."
+            )   
