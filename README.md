@@ -28,4 +28,4 @@ Course project for 24CSE0316 (AI and Machine Learning).
 
 - `data_preprocessing.py` - loads the CSV, scales Amount/Time, splits into train/test
 - `train.py` - trains all 5 models (Logistic Regression, Decision Tree, Random Forest, Naive Bayes, KNN), evaluates them, saves everything to `saved_models.pkl`
-- `app.py` - Streamlit dashboard that reads `saved_models.pkl` and shows EDA, PCA projection, model comparison, feature importance, and a page to test a custom transaction
+- `app.py` - Streamlit dashboard that reads `saved_models.pkl` and shows EDA, PCA projection, model comparison, feature importance, and a page to test a custom transaction and synthetic transaction generation
