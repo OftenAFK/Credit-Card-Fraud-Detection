@@ -491,7 +491,7 @@ elif menu == "Model Results & Metrics":
             res_df[display_columns].sort_values(
                 'f1', ascending=False
             ).style.format("{:.4f}").highlight_max(
-                axis=0, color="#d5f5e3"
+                axis=0, color="#2e5c42"
             ),
             use_container_width=True
         )
@@ -783,18 +783,250 @@ elif menu == "Model Results & Metrics":
 # ----------------------------
 # Page 4: Feature Importance
 # ----------------------------
-elif menu == "Feature Importance":
-    st.header("Feature Importance")
-    
-    rf = models['Random Forest']
-    importances = pd.Series(rf.feature_importances_, index=X_train.columns).sort_values(ascending=False)
 
+elif menu == "Feature Importance":
+    st.header("Feature Importance & Analysis")
+    st.write(
+        "Explore which features contribute most to the Random Forest "
+        "model's predictions and how individual features behave across "
+        "normal and fraudulent transactions."
+    )
+
+    # --------------------------------------------------
+    # 1. CALCULATE FEATURE IMPORTANCE
+    # --------------------------------------------------
+    rf = models['Random Forest']
+
+    importances = pd.Series(
+        rf.feature_importances_,
+        index=X_train.columns
+    ).sort_values(ascending=False)
+
+    st.divider()
+
+    # --------------------------------------------------
+    # 2. TOP 5 MOST IMPORTANT FEATURES
+    # --------------------------------------------------
+    st.subheader("Most Influential Features")
+
+    top_features = importances.head(5)
+
+    cols = st.columns(5)
+
+    for i, (feature, importance) in enumerate(top_features.items()):
+        cols[i].metric(
+            feature,
+            f"{importance * 100:.2f}%"
+        )
+
+    st.caption(
+        "Importance values represent each feature's relative "
+        "contribution to the Random Forest's total feature importance."
+    )
+
+    st.divider()
+
+    # --------------------------------------------------
+    # 3. TOP 15 FEATURE IMPORTANCE GRAPH
+    # --------------------------------------------------
     st.subheader("Random Forest - Top 15 Features")
-    fig, ax = plt.subplots(figsize=(7, 5))
-    importances.head(15).plot(kind='barh', ax=ax)
-    plt.gca().invert_yaxis()
-    plt.title('Random Forest feature importance (top 15)')
+
+    top_15 = importances.head(15).sort_values(ascending=True)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    bars = ax.barh(
+        top_15.index,
+        top_15.values,
+        color="#3498DB"
+    )
+
+    for bar, value in zip(bars, top_15.values):
+        ax.text(
+            bar.get_width(),
+            bar.get_y() + bar.get_height() / 2,
+            f" {value:.4f}",
+            va='center',
+            fontsize=9
+        )
+
+    ax.set_title("Random Forest Feature Importance")
+    ax.set_xlabel("Importance Score")
+    ax.set_ylabel("Features")
+    ax.grid(axis='x', alpha=0.2)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    fig.tight_layout()
     st.pyplot(fig)
+    plt.close(fig)
+
+    st.divider()
+
+    # --------------------------------------------------
+    # 4. CUMULATIVE FEATURE IMPORTANCE
+    # --------------------------------------------------
+    st.subheader("Cumulative Feature Importance")
+
+    cumulative_importance = importances.cumsum()
+
+    fig2, ax2 = plt.subplots(figsize=(10, 5))
+
+    ax2.plot(
+        range(1, len(cumulative_importance) + 1),
+        cumulative_importance.values * 100,
+        marker='o',
+        markersize=4,
+        linewidth=2,
+        color="#2ECC71"
+    )
+
+    ax2.axhline(
+        80,
+        color="#E74C3C",
+        linestyle='--',
+        label="80% importance"
+    )
+
+    ax2.set_title("Cumulative Importance Across Features")
+    ax2.set_xlabel("Number of Top Features")
+    ax2.set_ylabel("Cumulative Importance (%)")
+    ax2.set_ylim(0, 105)
+    ax2.legend()
+    ax2.grid(alpha=0.2)
+
+    fig2.tight_layout()
+    st.pyplot(fig2)
+    plt.close(fig2)
+
+    features_for_80 = (
+        cumulative_importance.searchsorted(0.80) + 1
+    )
+
+    st.info(
+        f"The top {features_for_80} features account for "
+        f"at least 80% of the model's total feature importance."
+    )
+
+    st.divider()
+
+    # --------------------------------------------------
+    # 5. FEATURE IMPORTANCE TABLE
+    # --------------------------------------------------
+    st.subheader("Complete Feature Importance Ranking")
+
+    importance_df = pd.DataFrame({
+        'Feature': importances.index,
+        'Importance': importances.values,
+        'Importance (%)': importances.values * 100
+    })
+
+    importance_df.insert(
+        0,
+        'Rank',
+        range(1, len(importance_df) + 1)
+    )
+
+    st.dataframe(
+        importance_df.style.format({
+            'Importance': '{:.5f}',
+            'Importance (%)': '{:.2f}%'
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.divider()
+
+    # --------------------------------------------------
+    # 6. INDIVIDUAL FEATURE ANALYSIS
+    # --------------------------------------------------
+
+# --------------------------------------------------
+# 6. INDIVIDUAL FEATURE ANALYSIS
+# --------------------------------------------------
+    st.subheader("Individual Feature Analysis")
+
+    selected_feature = st.selectbox(
+        "Select a feature to examine",
+        X_train.columns.tolist()
+    )
+
+    y_train = artifacts['y_train']
+    # Use processed training data instead of df_raw
+    feature_data = X_train[[selected_feature]].copy()
+
+    # Attach corresponding training labels
+    feature_data['Class'] = np.asarray(y_train)
+
+    fig3, ax3 = plt.subplots(figsize=(10, 5))
+
+    normal_values = feature_data[
+        feature_data['Class'] == 0
+    ][selected_feature]
+
+    fraud_values = feature_data[
+        feature_data['Class'] == 1
+    ][selected_feature]
+
+    ax3.hist(
+        normal_values,
+        bins=50,
+        density=True,
+        alpha=0.5,
+        color="#3498DB",
+        label="Normal"
+    )
+
+    ax3.hist(
+        fraud_values,
+        bins=50,
+        density=True,
+        alpha=0.6,
+        color="#E74C3C",
+        label="Fraud"
+    )
+
+    ax3.set_title(
+        f"{selected_feature}: Normal vs Fraud Distribution"
+    )
+    ax3.set_xlabel(selected_feature)
+    ax3.set_ylabel("Density")
+    ax3.legend()
+    ax3.grid(alpha=0.2)
+
+    fig3.tight_layout()
+    st.pyplot(fig3)
+    plt.close(fig3)
+
+    st.caption(
+        "Distributions are normalized separately to make their shapes "
+        "easier to compare despite the class imbalance. Features are shown "
+        "after preprocessing."
+    )
+
+
+    # --------------------------------------------------
+    # 7. INTERPRETATION
+    # --------------------------------------------------
+    st.subheader("Understanding Feature Importance")
+
+    st.markdown(
+        """
+        - **Higher importance:** The feature contributes more to the
+          Random Forest's decision-making process.
+        - **Lower importance:** The feature contributes relatively
+          less to the model's predictions.
+        - **Cumulative importance:** Shows how much of the total
+          importance is accounted for by the top-ranked features.
+
+        **Important:** Feature importance does not establish causation.
+        A highly ranked feature is not necessarily a direct indicator
+        of fraudulent activity. Correlated features can also share or
+        influence importance scores.
+        """
+    )
+
 
 # ----------------------------
 # Page 5: Prediction Interface
