@@ -28,12 +28,22 @@ except FileNotFoundError:
     st.error("Missing saved files! Run `python train.py` first to generate saved_models.pkl.")
     st.stop()
 
+# models = artifacts['models']
+# results = artifacts['results']
+# cv_scores = artifacts['cv_scores']
+# X_test = artifacts['X_test']
+# y_test = artifacts['y_test']
+# X_train = artifacts['X_train']
+
 models = artifacts['models']
 results = artifacts['results']
 cv_scores = artifacts['cv_scores']
+
+X_train = artifacts['X_train']
+y_train = artifacts['y_train']
+
 X_test = artifacts['X_test']
 y_test = artifacts['y_test']
-X_train = artifacts['X_train']
 
 # Navigation sidebar
 menu = st.sidebar.radio(
@@ -44,7 +54,8 @@ menu = st.sidebar.radio(
         "Model Results & Metrics", 
         "Feature Importance", 
         "Test Custom Transaction",
-        "Synthetic Transaction Generator"
+        "Synthetic Transaction Generator",
+        "SMOTE - Class Balancing"
     ]
 )
 
@@ -1708,3 +1719,236 @@ elif menu == "Synthetic Transaction Generator":
                 "Fraud transaction loaded! "
                 "Go to Test Custom Transaction."
             )   
+
+
+elif menu == "SMOTE - Class Balancing":
+
+    st.header("SMOTE - Class Balancing")
+
+    st.write(
+        "The credit card fraud dataset contains significantly "
+        "fewer fraudulent transactions than normal transactions. "
+        "We use SMOTE (Synthetic Minority Over-sampling Technique) "
+        "to generate additional synthetic fraud samples during training."
+    )
+
+    st.info(
+        "SMOTE is applied only to the training data. "
+        "The original test dataset remains completely untouched."
+    )
+
+    # ==========================================
+    # 1. RETRIEVE TRAINING DATA
+    # ==========================================
+
+    original_labels = np.asarray(artifacts['y_train'])
+    balanced_labels = np.asarray(artifacts['y_train_smote'])
+
+    synthetic_fraud = artifacts['synthetic_fraud']
+
+    original_counts = pd.Series(
+        original_labels
+    ).value_counts().sort_index()
+
+    balanced_counts = pd.Series(
+        balanced_labels
+    ).value_counts().sort_index()
+
+    original_normal = int(original_counts.get(0, 0))
+    original_fraud = int(original_counts.get(1, 0))
+
+    balanced_normal = int(balanced_counts.get(0, 0))
+    balanced_fraud = int(balanced_counts.get(1, 0))
+
+    synthetic_count = len(synthetic_fraud)
+
+    # ==========================================
+    # 2. SUMMARY METRICS
+    # ==========================================
+
+    st.subheader("SMOTE Overview")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Original Fraud Records",
+        f"{original_fraud:,}"
+    )
+
+    col2.metric(
+        "Fraud Records After SMOTE",
+        f"{balanced_fraud:,}"
+    )
+
+    col3.metric(
+        "Synthetic Records Generated",
+        f"{synthetic_count:,}",
+        delta=f"+{synthetic_count:,}"
+    )
+
+    st.divider()
+
+    # ==========================================
+    # 3. BEFORE AND AFTER DISTRIBUTION
+    # ==========================================
+
+    st.subheader("Class Distribution Comparison")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.markdown("**Before SMOTE**")
+
+        before_df = pd.DataFrame({
+            "Transaction Type": ["Normal", "Fraud"],
+            "Count": [original_normal, original_fraud]
+        }).set_index("Transaction Type")
+
+        st.bar_chart(
+            before_df,
+            color="#3498DB"
+        )
+
+        st.caption(
+            f"Normal: {original_normal:,} | "
+            f"Fraud: {original_fraud:,}"
+        )
+
+    with col2:
+
+        st.markdown("**After SMOTE**")
+
+        after_df = pd.DataFrame({
+            "Transaction Type": ["Normal", "Fraud"],
+            "Count": [balanced_normal, balanced_fraud]
+        }).set_index("Transaction Type")
+
+        st.bar_chart(
+            after_df,
+            color="#E74C3C"
+        )
+
+        st.caption(
+            f"Normal: {balanced_normal:,} | "
+            f"Fraud: {balanced_fraud:,}"
+        )
+
+    st.divider()
+
+    # ==========================================
+    # 4. DISTRIBUTION TABLE
+    # ==========================================
+
+    st.subheader("Detailed Distribution")
+
+    distribution_df = pd.DataFrame({
+        "Class": ["Normal", "Fraud"],
+        "Before SMOTE": [
+            original_normal,
+            original_fraud
+        ],
+        "After SMOTE": [
+            balanced_normal,
+            balanced_fraud
+        ]
+    })
+
+    distribution_df["Additional Records"] = (
+        distribution_df["After SMOTE"] -
+        distribution_df["Before SMOTE"]
+    )
+
+    st.dataframe(
+        distribution_df,
+        hide_index=True,
+        use_container_width=True
+    )
+
+    st.divider()
+
+    # ==========================================
+    # 5. EXPLORE SYNTHETIC FRAUD RECORDS
+    # ==========================================
+
+    st.subheader("Explore Synthetic Fraud Transactions")
+
+    st.write(
+        "The following records were generated by SMOTE "
+        "and were not present in the original training dataset."
+    )
+
+    if synthetic_count > 0:
+
+        number_of_samples = st.slider(
+            "Number of synthetic records to display",
+            min_value=1,
+            max_value=min(50, synthetic_count),
+            value=min(5, synthetic_count),
+            key="smote_sample_count"
+        )
+
+        sample_df = synthetic_fraud.head(
+            number_of_samples
+        )
+
+        st.dataframe(
+            sample_df,
+            use_container_width=True
+        )
+
+        st.caption(
+            f"Showing {number_of_samples} out of "
+            f"{synthetic_count:,} synthetic fraud records."
+        )
+
+        st.download_button(
+            label="Download Synthetic Fraud Records (CSV)",
+            data=synthetic_fraud.to_csv(index=False),
+            file_name="synthetic_fraud_transactions.csv",
+            mime="text/csv"
+        )
+
+    else:
+
+        st.warning("No synthetic fraud records were found.")
+
+    st.divider()
+
+    # ==========================================
+    # 6. HOW SMOTE WORKS
+    # ==========================================
+
+    st.subheader("How Does SMOTE Work?")
+
+    st.write(
+        "SMOTE identifies existing minority-class transactions "
+        "and their nearest neighbours. It generates new synthetic "
+        "transactions by interpolating between these examples."
+    )
+
+    st.latex(
+        r"X_{new} = X_i + \\lambda (X_{neighbor} - X_i)"
+    )
+
+    st.write(
+        "Where:"
+    )
+
+    st.markdown("""
+    - **Xᵢ:** An existing fraudulent transaction.
+    - **Xneighbor:** One of its nearest fraudulent neighbours.
+    - **λ:** A randomly generated value between 0 and 1.
+    - **Xnew:** The newly generated synthetic transaction.
+    """)
+
+    st.success(
+        "SMOTE helps models learn from a more balanced training "
+        "dataset while preserving the original test distribution "
+        "for unbiased evaluation."
+    )
+
+    st.caption(
+        "Note: SMOTE-generated records are synthetic feature "
+        "vectors, not verified real-world fraudulent transactions."
+    )
